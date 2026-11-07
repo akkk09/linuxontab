@@ -35,7 +35,7 @@ Open the Pages project → **Settings** → **Variables and Secrets**. Add these
 | Name | Value |
 |---|---|
 | `AUTH_USERNAME` | The username you want to use |
-| `AUTH_PASSWORD_HASH` | A salted PBKDF2-SHA256 hash (instructions below) |
+| `AUTH_PASSWORD` | The password you want to use (enter it directly as an encrypted Cloudflare Secret) |
 | `SESSION_SECRET` | A random secret of at least 32 characters |
 
 Generate a session secret on Linux:
@@ -44,20 +44,9 @@ Generate a session secret on Linux:
 openssl rand -base64 48
 ```
 
-Generate a password hash on Linux with Python 3. This prompts for the password without echoing it, then prints a salted PBKDF2-SHA256 hash:
+Set `AUTH_PASSWORD` to the password you want to use. Cloudflare stores it as an encrypted Secret. Do not put it in GitHub, source files, or chat. After adding or changing secrets, trigger a new deployment.
 
-```sh
-python3 - <<'PY'
-import getpass, hashlib, secrets
-password = getpass.getpass("Password to protect LinuxOnTab: ")
-salt = secrets.token_bytes(16)
-iterations = 310_000
-derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
-print(f"pbkdf2-sha256${iterations}${salt.hex()}${derived.hex()}")
-PY
-```
-
-Copy the full output into the `AUTH_PASSWORD_HASH` secret. Keep `AUTH_USERNAME` as your chosen username, stored as an encrypted Cloudflare Secret. Do not put the plaintext password or hash in GitHub, source files, or chat. After adding or changing secrets, trigger a new deployment. The hash uses a random salt and 310,000 PBKDF2-SHA256 iterations.
+The login function compares the submitted password against this secret. This is simpler than maintaining a password hash, but a plaintext password is held in the Pages Function environment, so use a unique password that you do not use anywhere else.
 
 If you use Preview deployments, add the same secrets to the Preview environment only if you want previews to require the same login.
 
@@ -68,7 +57,7 @@ In Cloudflare Security → WAF → Rate limiting rules, add a rule for:
 - HTTP method equals \`POST\`
 - A low request threshold, such as 5 requests per minute per IP, then block for a short period.
 
-This reduces password-guessing attempts. The Pages Function also checks the request origin and checks the username in constant time and verifies the password with salted PBKDF2-SHA256.
+This reduces password-guessing attempts. The Pages Function also checks the request origin and checks the username in constant time and verifies the password against the encrypted Cloudflare Secret.
 
 ## 4. Optional custom domain
 
