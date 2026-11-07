@@ -102,7 +102,7 @@ function loginPage() {
     'const form=document.getElementById("login");const button=document.getElementById("submit");const error=document.getElementById("error");',
     'form.addEventListener("submit",async(event)=>{event.preventDefault();button.disabled=true;button.textContent="Checking…";error.textContent="";',
     'try{const body=new URLSearchParams(new FormData(form));const response=await fetch("/__auth/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});',
-    'if(!response.ok)throw new Error(response.status===401?"Incorrect username or password.":"Sign-in failed. Try again.");location.replace("/");',
+    'if(!response.ok)throw new Error(response.status===401?"Incorrect username or password.":"Sign-in failed. Try again.");location.replace("/shell/");',
     '}catch(err){error.textContent=err.message||"Could not sign in.";}finally{button.disabled=false;button.textContent="Sign in";}});',
     '</script>','</body>','</html>'
   ].join("\n");
