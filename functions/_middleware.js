@@ -50,31 +50,14 @@ async function validSession(request, secret) {
       encoder.encode("linuxontab-session-v1:" + expires));
   } catch { return false; }
 }
-function fromHex(value) {
-  if (!/^[0-9a-f]{32,128}$/i.test(value) || value.length % 2 !== 0) return null;
-  const bytes = new Uint8Array(value.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(value.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}
-async function verifyPassword(password, encodedHash) {
-  // Cloudflare secrets can accidentally include copied whitespace/newlines.
-  // The hash format itself contains no whitespace, so normalize it before parsing.
-  encodedHash = String(encodedHash || "").trim();
-  // Format: pbkdf2-sha256$iterations$salt-hex$derived-key-hex
-  const parts = encodedHash.split("$");
-  if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
-  const iterations = Number(parts[1]);
-  const salt = fromHex(parts[2]);
-  const expected = fromHex(parts[3]);
-  if (!Number.isSafeInteger(iterations) || iterations < 100000 || iterations > 600000 ||
-      !salt || salt.length < 16 || !expected || expected.length !== 32) return false;
-  try {
-    const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-    const derived = new Uint8Array(await crypto.subtle.deriveBits(
-      { name: "PBKDF2", salt, iterations, hash: "SHA-256" }, key, 256
-    ));
-    return constantTimeEqual(derived, expected);
-  } catch { return false; }
+async function verifyPassword(password, configuredPassword) {
+  // Compare SHA-256 digests in constant time. The configured password is
+  // stored as a Cloudflare encrypted Secret, not in the repository.
+  const [given, expected] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(password)),
+    crypto.subtle.digest("SHA-256", encoder.encode(configuredPassword))
+  ]);
+  return constantTimeEqual(new Uint8Array(given), new Uint8Array(expected));
 }
 function constantTimeEqual(a, b) {
   if (a.length !== b.length) return false;
@@ -145,8 +128,8 @@ export async function onRequest(context) {
   if(path==="/__auth/login") {
     if(request.method!=="POST") return json({error:"Method not allowed"},405,{Allow:"POST"});
     if(!originIsValid(request)) return json({error:"Invalid origin"},403);
-    if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD_HASH||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
-      return json({error:"Authentication is not configured. Add AUTH_USERNAME, AUTH_PASSWORD_HASH and a 32+ character SESSION_SECRET in Cloudflare Pages settings."},503);
+    if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
+      return json({error:"Authentication is not configured. Add AUTH_USERNAME, AUTH_PASSWORD and a 32+ character SESSION_SECRET in Cloudflare Pages settings."},503);
     const length=Number(request.headers.get("Content-Length")||"0");
     if(length>4096) return json({error:"Request too large"},413);
     let form;
@@ -162,20 +145,10 @@ export async function onRequest(context) {
     const [givenUser,wantedUser,passwordMatches]=await Promise.all([
       crypto.subtle.digest("SHA-256",encoder.encode(username)),
       crypto.subtle.digest("SHA-256",encoder.encode(env.AUTH_USERNAME)),
-      verifyPassword(password,env.AUTH_PASSWORD_HASH)
+      verifyPassword(password,env.AUTH_PASSWORD)
     ]);
     const userMatches=constantTimeEqual(new Uint8Array(givenUser),new Uint8Array(wantedUser));
-    if(!(userMatches&&passwordMatches)) {
-      // Temporary diagnostics: booleans only; never log credential material.
-      console.log("LinuxOnTab auth check failed", {
-        usernameConfigured: typeof env.AUTH_USERNAME === "string" && env.AUTH_USERNAME.length > 0,
-        hashConfigured: typeof env.AUTH_PASSWORD_HASH === "string" && env.AUTH_PASSWORD_HASH.length > 0,
-        hashPrefixValid: String(env.AUTH_PASSWORD_HASH || "").trim().startsWith("pbkdf2-sha256$"),
-        usernameMatches: userMatches,
-        passwordMatches
-      });
-      return json({error:"Invalid credentials"},401);
-    }
+    if(!(userMatches&&passwordMatches)) return json({error:"Invalid credentials"},401);
     const token=await createSession(env.SESSION_SECRET);
     return json({ok:true},200,{"Set-Cookie":COOKIE_NAME+"="+token+"; Path=/; Max-Age="+SESSION_SECONDS+"; Secure; HttpOnly; SameSite=Strict"});
   }
@@ -188,7 +161,7 @@ export async function onRequest(context) {
     }});
   }
 
-  if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD_HASH||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
+  if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
     return new Response("Authentication is not configured.",{status:503,headers:{"Content-Type":"text/plain; charset=utf-8","Cache-Control":"no-store"}});
 
   if(!(await validSession(request,env.SESSION_SECRET))) {
