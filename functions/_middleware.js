@@ -59,6 +59,14 @@ async function verifyPassword(password, configuredPassword) {
   ]);
   return constantTimeEqual(new Uint8Array(given), new Uint8Array(expected));
 }
+function authConfigProblem(env) {
+  const missing = [];
+  if (typeof env.AUTH_USERNAME !== "string" || env.AUTH_USERNAME.length === 0) missing.push("AUTH_USERNAME");
+  if (typeof env.AUTH_PASSWORD !== "string" || env.AUTH_PASSWORD.length === 0) missing.push("AUTH_PASSWORD");
+  if (typeof env.SESSION_SECRET !== "string" || env.SESSION_SECRET.length === 0) missing.push("SESSION_SECRET");
+  else if (env.SESSION_SECRET.length < 32) missing.push("SESSION_SECRET (must be at least 32 characters)");
+  return missing;
+}
 function constantTimeEqual(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -128,8 +136,9 @@ export async function onRequest(context) {
   if(path==="/__auth/login") {
     if(request.method!=="POST") return json({error:"Method not allowed"},405,{Allow:"POST"});
     if(!originIsValid(request)) return json({error:"Invalid origin"},403);
-    if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
-      return json({error:"Authentication is not configured. Add AUTH_USERNAME, AUTH_PASSWORD and a 32+ character SESSION_SECRET in Cloudflare Pages settings."},503);
+    const configProblem = authConfigProblem(env);
+    if(configProblem.length)
+      return json({error:"Authentication configuration problem: "+configProblem.join(", ")+" is missing or invalid. Check the Production bindings for this deployment."},503);
     const length=Number(request.headers.get("Content-Length")||"0");
     if(length>4096) return json({error:"Request too large"},413);
     let form;
@@ -161,8 +170,9 @@ export async function onRequest(context) {
     }});
   }
 
-  if(!env.AUTH_USERNAME||!env.AUTH_PASSWORD||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)
-    return new Response("Authentication is not configured.",{status:503,headers:{"Content-Type":"text/plain; charset=utf-8","Cache-Control":"no-store"}});
+  const configProblem = authConfigProblem(env);
+  if(configProblem.length)
+    return new Response("Authentication configuration problem: "+configProblem.join(", ")+" is missing or invalid. Check the Production bindings for this deployment.",{status:503,headers:{"Content-Type":"text/plain; charset=utf-8","Cache-Control":"no-store"}});
 
   if(!(await validSession(request,env.SESSION_SECRET))) {
     const acceptsHtml=(request.headers.get("Accept")||"").includes("text/html");
